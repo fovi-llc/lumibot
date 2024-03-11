@@ -1,11 +1,13 @@
 import logging
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from datetime import date, timedelta
 
 import pandas as pd
 from lumibot.data_sources import DataSourceBacktesting
 from lumibot.entities import Asset, AssetsMapping, Bars
 
+
+MAX_STORAGE_BYTES = 1_000_000_000  # 1 GB
 
 class PandasData(DataSourceBacktesting):
     """
@@ -24,7 +26,7 @@ class PandasData(DataSourceBacktesting):
         self.name = "pandas"
         self.pandas_data = self._set_pandas_data_keys(pandas_data)
         self.auto_adjust = auto_adjust
-        self._data_store = {}
+        self._data_store = OrderedDict()
         self._date_index = None
         self._date_supply = None
         self._timestep = "minute"
@@ -32,7 +34,8 @@ class PandasData(DataSourceBacktesting):
 
     @staticmethod
     def _set_pandas_data_keys(pandas_data):
-        new_pandas_data = {}
+        # OrderedDict tracks the LRU dataframes for when it comes time to do evictions.
+        new_pandas_data = OrderedDict()
 
         def _get_new_pandas_data_key(data):
             # Always save the asset as a tuple of Asset and quote
@@ -62,6 +65,17 @@ class PandasData(DataSourceBacktesting):
 
         return new_pandas_data
 
+    @staticmethod
+    def _enforce_storage_limit(pandas_data: OrderedDict):
+        storage_used = sum(data.df.memory_usage().sum() for data in pandas_data.values())
+        logging.info(f"{storage_used = :,} bytes for {len(pandas_data)} items")
+        while storage_used > MAX_STORAGE_BYTES:
+            k, d = pandas_data.popitem(last=False)
+            mu = d.df.memory_usage().sum()
+            storage_used -= mu
+            logging.info(f"Storage limit exceeded. Evicted LRU data: {k} used {mu:,} bytes")
+        return
+    
     def load_data(self):
         self._data_store = self.pandas_data
         self._expiries_exist = (

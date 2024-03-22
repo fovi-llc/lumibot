@@ -1,22 +1,31 @@
 import datetime
 import logging
-import os
 import warnings
 from asyncio.log import logger
 from decimal import Decimal
 
-import jsonpickle
 import pandas as pd
+
 from lumibot.backtesting import BacktestingBroker, PolygonDataBacktesting
 from lumibot.entities import Asset, Position
-from lumibot.tools import (create_tearsheet, day_deduplicate,
-                           get_risk_free_rate, get_symbol_returns,
-                           plot_indicators, plot_returns, stats_summary,
-                           to_datetime_aware)
+from lumibot.tools import (
+    create_tearsheet,
+    day_deduplicate,
+    get_symbol_returns,
+    plot_indicators,
+    plot_returns,
+    stats_summary,
+    to_datetime_aware,
+)
 from lumibot.traders import Trader
 
 from .strategy_executor import StrategyExecutor
 
+
+class CustomLoggerAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        # Use an f-string for formatting
+        return f'[{self.extra["strategy_name"]}] {msg}', kwargs
 
 class _Strategy:
     IS_BACKTESTABLE = True
@@ -45,6 +54,7 @@ class _Strategy:
         discord_webhook_url=None,
         account_history_db_connection_str=None,
         strategy_id=None,
+        discord_account_summary_footer=None,
         **kwargs,
     ):
         """Initializes a Strategy object.
@@ -107,6 +117,10 @@ class _Strategy:
             must be set for this to work). Defaults to None (no discord alerts).
             For instructions on how to create a discord webhook url, see this link:
             https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks
+        discord_account_summary_footer : str
+            The footer to use for the account summary sent to the discord channel if discord_webhook_url is set and the
+            account_history_db_connection_str is set.
+            Defaults to None (no footer).
         account_history_db_connection_str : str
             The connection string to use for the account history database. This is used to store the account history
             for the strategy. The account history is sent to the discord channel at the end of each day. The connection
@@ -158,8 +172,12 @@ class _Strategy:
         if self._name is None:
             self._name = self.__class__.__name__
 
+        # Create an adapter with 'strategy_name' set to the instance's name
+        self.logger = CustomLoggerAdapter(logger, {'strategy_name': self._name})
+
         self.discord_webhook_url = discord_webhook_url
         self.account_history_db_connection_str = account_history_db_connection_str
+        self.discord_account_summary_footer = discord_account_summary_footer
 
         if strategy_id is None:
             self.strategy_id = self._name
@@ -167,6 +185,7 @@ class _Strategy:
             self.strategy_id = strategy_id
 
         self._quote_asset = quote_asset
+        self.broker.quote_assets.add(self._quote_asset)
 
         # Setting the broker object
         self._is_backtesting = self.broker.IS_BACKTESTING_BROKER
@@ -209,8 +228,10 @@ class _Strategy:
                     )
                     self.broker._filled_positions.append(position)
 
-        # Setting execution parameters
+        # Set the the state of first iteration to True. This will later be updated to False by the strategy executor
         self._first_iteration = True
+
+        # Setting execution parameters
         self._last_on_trading_iteration_datetime = None
         if not self._is_backtesting:
             self.update_broker_balances()
@@ -289,7 +310,7 @@ class _Strategy:
                     result[key] = self.__dict__[key]
                 except KeyError:
                     pass
-                    # logging.warning(
+                    # self.logger.warning(
                     #     "Cannot perform deepcopy on %r" % self.__dict__[key]
                     # )
             elif key in [
@@ -636,9 +657,9 @@ class _Strategy:
         if not show_plot:
             return
         elif self._strategy_returns_df is None:
-            logging.warning("Cannot plot returns because the strategy returns are missing")
+            self.logger.warning("Cannot plot returns because the strategy returns are missing")
         elif self._benchmark_returns_df is None:
-            logging.warning("Cannot plot returns because the benchmark returns are missing")
+            self.logger.warning("Cannot plot returns because the benchmark returns are missing")
         else:
             plot_returns(
                 self._strategy_returns_df,
@@ -664,7 +685,7 @@ class _Strategy:
             save_tearsheet = True
 
         if self._strategy_returns_df is None:
-            logging.warning("Cannot create a tearsheet because the strategy returns are missing")
+            self.logger.warning("Cannot create a tearsheet because the strategy returns are missing")
         else:
             strat_name = self._name if self._name is not None else "Strategy"
             create_tearsheet(

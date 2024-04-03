@@ -156,7 +156,7 @@ class Order:
         trail_percent : float
             Trailing stop orders allow you to continuously and
             automatically keep updating the stop price threshold based
-            on the stock price movement. `trail_price` sets the
+            on the stock price movement. `trail_percent` sets the
             trailing price in percent.
         position_filled : bool
             The order has been filled.

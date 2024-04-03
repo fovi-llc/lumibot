@@ -1,6 +1,6 @@
 import logging
 import traceback
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import date, timedelta
 
 from polygon import RESTClient

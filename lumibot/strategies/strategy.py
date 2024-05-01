@@ -327,13 +327,13 @@ class Strategy(_Strategy):
         return self._analysis
 
     @property
-    def risk_free_rate(self):
-        # Get the current datetime
-        now = self.get_datetime()
-
-        # Use the yahoo data to get the risk free rate
-        rfr = get_risk_free_rate(now)
-        return rfr
+    def risk_free_rate(self) -> float:
+        if self._risk_free_rate is not None:
+            return self._risk_free_rate
+        else:
+            # Use the yahoo data to get the risk free rate, or 0 if None is returned
+            now = self.get_datetime()
+            return get_risk_free_rate(now) or 0.0
 
     # ======= Helper Methods =======================
 
@@ -1493,7 +1493,7 @@ class Strategy(_Strategy):
 
         return self.broker.submit_order(order)
 
-    def submit_orders(self, orders):
+    def submit_orders(self, orders, **kwargs):
         """Submit a list of orders
 
         Submits a list of orders for processing by the active broker.
@@ -1503,11 +1503,29 @@ class Strategy(_Strategy):
         orders : list of orders
             A list of order objects containing the asset and
             instructions for the orders.
-
+        is_multileg : bool
+            Tradier only.
+            A boolean value to indicate if the orders are part of one multileg order.
+            Currently this is only available for Tradier.
+        order_type : str
+            Tradier only.
+            The order type for the multileg order. Possible values are:
+            ('market', 'debit', 'credit', 'even'). Default is 'market'.
+        duration : str
+            Tradier only.
+            The duration for the multileg order. Possible values are:
+            ('day', 'gtc', 'pre', 'post'). Default is 'day'.
+        price : float
+            Tradier only.
+            The limit price for the multileg order. Required for 'debit' and 'credit' order types.
+        tag : str
+            Tradier only.
+            A tag for the multileg order.
+        
         Returns
         -------
-        list of orders
-            List of processed order object.
+        list of Order objects
+            List of processed order objects.
 
         Example
         -------
@@ -1604,7 +1622,7 @@ class Strategy(_Strategy):
         >>> order2 = self.create_order((asset_ETH, asset_quote), 10, "buy")
         >>> self.submit_order([order1, order2])
         """
-        return self.broker.submit_orders(orders)
+        return self.broker.submit_orders(orders, **kwargs)
 
     def wait_for_order_registration(self, order):
         """Wait for the order to be registered by the broker
@@ -1886,6 +1904,31 @@ class Strategy(_Strategy):
             self.log_message(f"Could not get last price for {asset}", color="red")
             self.log_message(f"{e}")
             return None
+        
+    def get_quote(self, asset):
+        """Get a quote for the asset.
+
+        NOTE: This currently only works with Tradier. It does not work with backtetsing or other brokers.
+        
+        Parameters
+        ----------
+        asset : Asset object
+            The asset for which the quote is needed.
+            
+        Returns
+        -------
+        dict
+            A dictionary with the quote information, eg. bid, ask, etc.
+        """
+
+        asset = self._sanitize_user_asset(asset)
+
+        # Check if the broker has the get_quote method (not all brokers do)
+        if not hasattr(self.broker.data_source, "get_quote"):
+            self.log_message("Broker does not have a get_quote method.")
+            return None
+
+        return self.broker.data_source.get_quote(asset)
 
     def get_tick(self, asset):
         """Takes an Asset and returns the last known price"""
@@ -1984,6 +2027,33 @@ class Strategy(_Strategy):
         """
         asset = self._sanitize_user_asset(asset)
         return self.broker.get_chains(asset)
+    
+    def get_next_trading_day(self, date, exchange='NYSE'):
+        """
+        Finds the next trading day for the given date and exchange.
+        
+        Parameters:
+            date (str): The date from which to find the next trading day, in 'YYYY-MM-DD' format.
+            exchange (str): The exchange calendar to use, default is 'NYSE'.
+            
+        Returns:
+            next_trading_day (datetime.date): The next trading day after the given date.
+        """
+        
+        # Load the specified market calendar
+        calendar = mcal.get_calendar(exchange)
+        
+        # Convert the input string date to pandas Timestamp
+        date_timestamp = pd.Timestamp(date)
+        
+        # Get the next trading day. The schedule is inclusive of the start_date when the market is open on this day.
+        # Hence, we add 1 day to the start_date to ensure we start checking from the day after.
+        schedule = calendar.schedule(start_date=date_timestamp + pd.Timedelta(days=1), end_date=date_timestamp + pd.Timedelta(days=10))
+        
+        # The next trading day is the first entry in the schedule
+        next_trading_day = schedule.index[0].date()
+        
+        return next_trading_day
 
     def get_chain(self, chains, exchange="SMART"):
         """Returns option chain for a particular exchange.
@@ -2319,7 +2389,7 @@ class Strategy(_Strategy):
         """
         return self.broker.data_source.DEFAULT_PYTZ
 
-    def get_datetime(self):
+    def get_datetime(self, adjust_for_delay=False):
         """Returns the current datetime according to the data source. In a backtest this will be the current bar's datetime. In live trading this will be the current datetime on the exchange.
 
         Returns
@@ -2333,7 +2403,7 @@ class Strategy(_Strategy):
         >>> datetime = self.get_datetime()
         >>> self.log_message(f"The current datetime is {datetime}")
         """
-        return self.broker.data_source.get_datetime()
+        return self.broker.data_source.get_datetime(adjust_for_delay=adjust_for_delay)
 
     def get_timestamp(self):
         """Returns the current timestamp according to the data source. In a backtest this will be the current bar's timestamp. In live trading this will be the current timestamp on the exchange.
@@ -3620,7 +3690,7 @@ class Strategy(_Strategy):
         price : float
             The price of the fill.
 
-        quantity : int
+        quantity : float
             The quantity of the fill.
 
         multiplier : float
@@ -3723,13 +3793,13 @@ class Strategy(_Strategy):
                 f"Failed to send message to Discord. Status code: {response.status_code}, message: {response.text}"
             )
 
-    def send_spark_chart_to_discord(self, stats_df, portfolio_value, now):
+    def send_spark_chart_to_discord(self, stats_df, portfolio_value, now, days=180):
         # Check if we are in backtesting mode, if so, don't send the message
         if self.is_backtesting:
             return
 
-        # Only keep the stats for the past week
-        stats_df = stats_df.loc[stats_df["datetime"] >= (now - pd.Timedelta(days=7))]
+        # Only keep the stats for the past X days
+        stats_df = stats_df.loc[stats_df["datetime"] >= (now - pd.Timedelta(days=days))]
 
         # Set the default color
         color = "black"
@@ -3742,13 +3812,14 @@ class Strategy(_Strategy):
             # Remove nan values
             stats_df = stats_df.dropna()
 
-            # Get the portfolio value 7 days ago
-            portfolio_value_7_days_ago = stats_df.iloc[0]["portfolio_value"]
+            # Get the portfolio value at the beginning of the dataframe
+            portfolio_value_start = stats_df.iloc[0]["portfolio_value"]
+
             # Calculate the return over the past 7 days
-            return_7_days = ((portfolio_value / portfolio_value_7_days_ago) - 1) * 100
+            total_return = ((portfolio_value / portfolio_value_start) - 1) * 100
 
             # Check if we made a positive return, if so, set the color to green, otherwise set it to red
-            if return_7_days > 0:
+            if total_return > 0:
                 color = "green"
             else:
                 color = "red"

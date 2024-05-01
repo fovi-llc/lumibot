@@ -206,6 +206,10 @@ class Broker(ABC):
         """
         positions_broker = self._pull_positions(strategy)
         for position in positions_broker:
+            # Check if the position is None
+            if position is None:
+                continue
+
             # Check against existing position.
             position_lumi = [
                 pos_lumi
@@ -829,7 +833,7 @@ class Broker(ABC):
         """Submit an order for an asset"""
         self._orders_queue.put(order)
 
-    def submit_orders(self, orders):
+    def submit_orders(self, orders, **kwargs):
         """Submit orders"""
         self._orders_queue.put(orders)
 
@@ -1024,10 +1028,10 @@ class Broker(ABC):
             )
 
         if filled_quantity is not None:
-            error = ValueError(f"filled_quantity must be a positive integer, received {filled_quantity} instead")
+            error = ValueError(f"filled_quantity must be a positive integer or float, received {filled_quantity} instead")
             try:
-                if not isinstance(filled_quantity, Decimal):
-                    filled_quantity = Decimal(filled_quantity)
+                if not isinstance(filled_quantity, float):
+                    filled_quantity = float(filled_quantity)
                 if filled_quantity < 0:
                     raise error
             except ValueError:
@@ -1037,8 +1041,6 @@ class Broker(ABC):
             error = ValueError("price must be a positive float, received %r instead" % price)
             try:
                 price = float(price)
-                if price < 0:
-                    raise error
             except ValueError:
                 raise error
 

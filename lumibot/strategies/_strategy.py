@@ -279,6 +279,7 @@ class _Strategy:
         self._minutes_before_closing = minutes_before_closing
         self._minutes_before_opening = minutes_before_opening
         self._sleeptime = sleeptime
+        self._risk_free_rate = risk_free_rate
         self._executor = StrategyExecutor(self)
         self.broker._add_subscriber(self._executor)
 
@@ -331,7 +332,7 @@ class _Strategy:
         # Check if cash is in the list of positions yet
         for x in range(len(self.broker._filled_positions.get_list())):
             position = self.broker._filled_positions[x]
-            if position.asset == self.quote_asset:
+            if position is not None and position.asset == self.quote_asset:
                 position.quantity = cash
                 self.broker._filled_positions[x] = position
                 return
@@ -687,6 +688,13 @@ class _Strategy:
         if self._strategy_returns_df is None:
             self.logger.warning("Cannot create a tearsheet because the strategy returns are missing")
         else:
+            # Get the strategy parameters
+            strategy_parameters = self.parameters
+
+            # Remove pandas_data from the strategy parameters if it exists
+            if "pandas_data" in strategy_parameters:
+                del strategy_parameters["pandas_data"]
+
             strat_name = self._name if self._name is not None else "Strategy"
             create_tearsheet(
                 self._strategy_returns_df,
@@ -695,7 +703,9 @@ class _Strategy:
                 self._benchmark_returns_df,
                 self._benchmark_asset,
                 show_tearsheet,
+                save_tearsheet,
                 risk_free_rate=self.risk_free_rate,
+                strategy_parameters=strategy_parameters,
             )
 
     @classmethod
@@ -998,6 +1008,7 @@ class _Strategy:
             show_tearsheet=show_tearsheet,
             save_tearsheet=save_tearsheet,
             show_indicators=show_indicators,
+            tearsheet_file=tearsheet_file,
         )
 
         end = datetime.datetime.now()

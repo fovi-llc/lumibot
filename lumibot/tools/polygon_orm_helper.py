@@ -55,8 +55,8 @@ def polygon_orm_mapping(metadata: sqlalchemy.MetaData, mapper_registry: sqlalche
     # Define SQLAlchemy table metadata with a custom column for timestamp
     grouped_daily_agg_table = sqlalchemy.Table(
         "grouped_daily_agg_us_stocks_adjusted", metadata,
-        sqlalchemy.Column('ticker', sqlalchemy.String, primary_key=True),
         sqlalchemy.Column('timestamp', UnixTimestampDateType, primary_key=True, name='date'),
+        sqlalchemy.Column('ticker', sqlalchemy.String, primary_key=True),
         sqlalchemy.Column('open', sqlalchemy.Float(precision=ORM_PRICE_PRECISION)),
         sqlalchemy.Column('high', sqlalchemy.Float(precision=ORM_PRICE_PRECISION)),
         sqlalchemy.Column('low', sqlalchemy.Float(precision=ORM_PRICE_PRECISION)),

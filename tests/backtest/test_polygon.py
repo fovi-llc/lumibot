@@ -1,9 +1,11 @@
 import datetime
 import os
 from collections import defaultdict
+import pandas as pd
 
 import pandas_market_calendars as mcal
 
+import pytz
 from lumibot.backtesting import BacktestingBroker, PolygonDataBacktesting
 from lumibot.entities import Asset
 from lumibot.strategies import Strategy
@@ -215,7 +217,7 @@ class TestPolygonBacktestFull:
         )
         trader = Trader(logfile="", backtest=True)
         trader.add_strategy(poly_strat_obj)
-        results = trader.run_all(show_plot=False, show_tearsheet=False, save_tearsheet=False)
+        results = trader.run_all(show_plot=False, show_tearsheet=False, save_tearsheet=False, tearsheet_file="")
 
         assert results
         self.verify_backtest_results(poly_strat_obj)
@@ -272,3 +274,45 @@ class TestPolygonBacktestFull:
             polygon_has_paid_subscription=True,
         )
         assert results
+
+
+class TestPolygonDataSource:
+
+    def test_get_historical_prices(self):
+        tzinfo = pytz.timezone("America/New_York")
+        start = datetime.datetime(2024, 2, 5).astimezone(tzinfo)
+        end = datetime.datetime(2024, 2, 10).astimezone(tzinfo)
+
+        data_source = PolygonDataBacktesting(
+            start, end, api_key=POLYGON_API_KEY, has_paid_subscription=True
+        )
+        data_source._datetime = datetime.datetime(2024, 2, 7, 10).astimezone(tzinfo)
+        # This call will set make the data source use minute bars.
+        prices = data_source.get_historical_prices("SPY", 2, "minute")
+        # The data source will aggregate day bars from the minute bars.
+        prices = data_source.get_historical_prices("SPY", 2, "day")
+
+        # The expected df contains 2 days of data. And it is most recent from the
+        # past of the requested date.
+        expected_df = pd.DataFrame.from_records([
+            {
+                "datetime": "2024-02-05 00:00:00-05:00",
+                "open": 493.65,
+                "high": 494.3778,
+                "low": 490.23,
+                "close": 492.57,
+                "volume": 74655145.0
+            },
+            {
+                "datetime": "2024-02-06 00:00:00-05:00",
+                "open": 492.99,
+                "high": 494.3200,
+                "low": 492.03,
+                "close": 493.82,
+                "volume": 54775803.0
+            },
+        ], index="datetime")
+        expected_df.index = pd.to_datetime(expected_df.index).tz_convert(tzinfo)
+
+        assert prices is not None
+        assert prices.df.equals(expected_df)

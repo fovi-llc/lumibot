@@ -14,6 +14,7 @@ ALPACA_CONFIG = {  # Paper trading!
     "API_SECRET": os.environ.get("APCA_API_SECRET_KEY"),
     # If you want to use real money you must change this to False
     "PAPER": True,
+    "ENDPOINT": "https://paper-api.alpaca.markets",
 }
 
 
@@ -59,6 +60,20 @@ class TestAlpacaData(unittest.TestCase):
         #     print(bars.df)
         self.assertIsNotNone(bars)
         self.assertIsInstance(bars, Bars)
+    
+    def test_get_option_chain(self):
+        asset = Asset(symbol="AAPL")
+        chain = self.alpaca_data.get_chains(asset)
+        print(f"{chain=}")
+        self.assertIsNotNone(chain)
+        self.assertIsInstance(chain, dict)
+
+    def test_get_option_chain_for_exchange(self):
+        asset = Asset(symbol="AAPL")
+        chain = self.alpaca_data.get_chains(asset, exchange="X")
+        print(f"{chain=}")
+        self.assertIsNotNone(chain)
+        self.assertIsInstance(chain, dict)
 
     # def test_get_barset_from_api(self):
     #     asset = Asset(symbol="AAPL")

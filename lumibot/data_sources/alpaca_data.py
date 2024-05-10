@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -99,6 +100,9 @@ class AlpacaData(DataSource):
         # be to split it into chunks and request data for each chunk
         self.chunk_size = min(chunk_size, 100)
 
+        self._option_exchange_codes = None
+        self._reverse_option_exchange_codes = None
+
         # Connection to alpaca REST API
         self.config = config
 
@@ -115,7 +119,7 @@ class AlpacaData(DataSource):
             self.api_secret = config.API_SECRET
         else:
             raise ValueError("API_SECRET not found in config")
-        
+
         # Get the PAID_ACCOUNT parameter, which defaults to False
         if isinstance(config, dict) and "PAID_ACCOUNT" in config:
             self.is_paid_account = config["PAID_ACCOUNT"]
@@ -148,19 +152,96 @@ class AlpacaData(DataSource):
         else:
             self.version = "v2"
 
+    def get_option_exchange_codes(self):
+        """_summary_
+
+        Raises:
+            ValueError: Failed to get the option exchange codes from Alpaca
+
+        Returns:
+            Exchange code dictionary as supplied by Alpaca and a reverse dictionary with the exchange names in uppercase as keys.
+        """
+        if self._option_exchange_codes is None:
+            client = OptionHistoricalDataClient(self.api_key, self.api_secret)
+            self._option_exchange_codes = client.get_option_exchange_codes()
+            if (
+                (self._option_exchange_codes is None)
+                or not len(self._option_exchange_codes)
+                or not isinstance(self._option_exchange_codes, dict)
+            ):
+                self._option_exchange_codes = None
+                raise ValueError("Did not get the option exchange codes from Alpaca")
+            self._reverse_option_exchange_codes = {
+                value.upper(): key for key, value in self._option_exchange_codes.items()
+            }
+        return self._option_exchange_codes, self._reverse_option_exchange_codes
+
+    def lookup_exchange_code(self, exchange):
+        exchange_codes, reverse_option_exchange_codes = self.get_option_exchange_codes()
+        # If exchange is already an exchange code key, then return it
+        if exchange in exchange_codes:
+            return exchange
+        # Look for the exchange name in the reverse dictionary
+        exchange_code = reverse_option_exchange_codes.get(exchange.upper(), None)
+        if exchange_code is None:
+            raise ValueError(f"Could not find the exchange code for {exchange}")
+        return exchange_code
+
     def get_chains(self, asset: Asset, quote=None, exchange: str = None):
         """
-        Alpaca doesn't support option trading. This method is here to comply with the DataSource interface
+        This function returns the option chains for a given stock asset.
+
+        Parameters
+        ----------
+        asset : Asset
+            The stock asset to get the option chains for.
+        quote : Asset
+            The quote asset to get the option chains for (currently not used for Alpaca)
+        exchange : str
+            The exchange to get the option chains for.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the option chains for the given stock asset.
         """
-        raise NotImplementedError(
-            "Lumibot AlpacaData does not support get_chains() options data. If you need this "
-            "feature, please use a different data source."
-        )
+
+        if asset.asset_type != "stock":
+            raise ValueError("The asset type must be 'stock' to get option chains")
+
+        client = OptionHistoricalDataClient(self.api_key, self.api_secret)
+        params = OptionChainRequest(underlying_symbol=asset.symbol)
+        alpaca_chain = client.get_option_chain(params)
+
+        if exchange is not None:
+            exchange = self.lookup_exchange_code(exchange)
+
+        option_contracts = {
+            "Multiplier": None,
+            "Exchange": set(),
+            "Chains": {"CALL": defaultdict(list), "PUT": defaultdict(list)},
+        }
+
+        for snapshot in alpaca_chain.values():
+            asset = Asset.symbol2asset(snapshot.symbol)
+            if asset.asset_type != "option":
+                print(f"Skipping {snapshot} because the symbol is not an option")
+                continue
+            quote = snapshot.latest_quote
+            if quote:
+                if exchange:
+                    if quote.ask_exchange != exchange or quote.bid_exchange != exchange:
+                        continue
+                option_contracts["Exchange"].add(quote.ask_exchange)
+                option_contracts["Exchange"].add(quote.bid_exchange)
+                option_contracts["Chains"][asset.right][asset.expiration.strftime('%Y-%m-%d')].append(asset.strike)
+
+        return option_contracts
 
     def get_last_price(self, asset, quote=None, exchange=None, **kwargs):
         if quote is not None:
             # If the quote is not None, we use it even if the asset is a tuple
-            if type(asset) == Asset and asset.asset_type == "stock":
+            if isinstance(asset, Asset) and asset.asset_type == "stock":
                 symbol = asset.symbol
             elif isinstance(asset, tuple):
                 symbol = f"{asset[0].symbol}/{quote.symbol}"
@@ -192,6 +273,7 @@ class AlpacaData(DataSource):
 
             # The price is the average of the bid and ask
             price = (quote.bid_price + quote.ask_price) / 2
+
         elif isinstance(asset, Asset) and asset.asset_type == "option":
             # Options
             symbol = create_options_symbol(
@@ -204,6 +286,7 @@ class AlpacaData(DataSource):
             params = OptionLatestTradeRequest(symbol_or_symbols=symbol)
             trade = client.get_option_latest_trade(params)[symbol]
             price = trade.price
+
         else:
             # Stocks
             client = StockHistoricalDataClient(self.api_key, self.api_secret)
@@ -222,7 +305,7 @@ class AlpacaData(DataSource):
 
         if not timestep:
             timestep = self.get_timestep()
-        
+
         response = self._pull_source_symbol_bars(
             asset,
             length,
@@ -239,6 +322,74 @@ class AlpacaData(DataSource):
 
         bars = self._parse_source_symbol_bars(response, asset, quote=quote, length=length)
         return bars
+
+    def get_quote(self, asset, quote=None, exchange=None):
+        """
+        This function returns the quote of an asset.
+        Parameters
+        ----------
+        asset: Asset
+            The asset to get the quote for
+        quote: Asset
+            The quote asset to get the quote for (currently not used for Tradier)
+        exchange: str
+            The exchange to get the quote for (currently not used for Tradier)
+
+        Returns
+        -------
+        dict
+           Quote of the asset
+        """
+
+        if asset.asset_type == "option":
+            symbol = create_options_symbol(
+                asset.symbol,
+                asset.expiration,
+                asset.right,
+                asset.strike,
+            )
+        else:
+            symbol = asset.symbol
+
+        quotes_df = self.tradier.market.get_quotes([symbol])
+
+        # If the dataframe is empty, return an empty dictionary
+        if quotes_df is None or quotes_df.empty:
+            return {}
+
+        # Get the quote from the dataframe and convert it to a dictionary
+        quote = quotes_df.iloc[0].to_dict()
+
+        # Return the quote
+        return quote
+
+    def query_greeks(self, asset: Asset):
+        """
+        This function returns the greeks of an option as reported by the Tradier API.
+
+        Parameters
+        ----------
+        asset : Asset
+            The option asset to get the greeks for.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the greeks of the option.
+        """
+        greeks = {}
+        stock_symbol = asset.symbol
+        expiration = asset.expiration
+        option_symbol = create_options_symbol(stock_symbol, expiration, asset.right, asset.strike)
+        df_chains = self.tradier.market.get_option_chains(stock_symbol, expiration, greeks=True)
+        df = df_chains[df_chains["symbol"] == option_symbol]
+        if df.empty:
+            return {}
+
+        for col in [x for x in df.columns if 'greeks' in x]:
+            greek_name = col.replace('greeks.', '')
+            greeks[greek_name] = df[col].iloc[0]
+        return greeks
 
     def get_barset_from_api(self, asset, freq, limit=None, end=None, start=None, quote=None):
         """

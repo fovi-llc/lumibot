@@ -14,6 +14,7 @@ from alpaca.data.requests import (
     OptionLatestQuoteRequest,
     StockBarsRequest,
     StockLatestTradeRequest,
+    StockLatestQuoteRequest,
 )
 from alpaca.data.timeframe import TimeFrame
 
@@ -114,6 +115,14 @@ class AlpacaData(DataSource):
             self.api_secret = config.API_SECRET
         else:
             raise ValueError("API_SECRET not found in config")
+        
+        # Get the PAID_ACCOUNT parameter, which defaults to False
+        if isinstance(config, dict) and "PAID_ACCOUNT" in config:
+            self.is_paid_account = config["PAID_ACCOUNT"]
+        elif hasattr(config, "PAID_ACCOUNT"):
+            self.is_paid_account = config.PAID_ACCOUNT
+        else:
+            self.is_paid_account = False
 
         # If an ENDPOINT is provided, warn the user that it is not used anymore
         # Instead they should use the "PAPER" parameter, which is boolean
@@ -249,8 +258,8 @@ class AlpacaData(DataSource):
 
         if not end:
             # Alpaca limitation of not getting the most recent 15 minutes
-            # TODO: This is only needed if you dont have a paid alpaca subscription
-            end = datetime.now(timezone.utc) - timedelta(minutes=15)
+            if not self.is_paid_account:
+                end = datetime.now(timezone.utc) - timedelta(minutes=15)
 
         if not start:
             if str(freq) == "1Min":

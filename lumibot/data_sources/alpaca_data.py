@@ -3,16 +3,22 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
+from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.requests import (
     CryptoBarsRequest,
     CryptoLatestQuoteRequest,
     CryptoLatestTradeRequest,
+    OptionBarsRequest,
+    OptionChainRequest,
+    OptionLatestTradeRequest,
+    OptionLatestQuoteRequest,
     StockBarsRequest,
     StockLatestTradeRequest,
 )
 from alpaca.data.timeframe import TimeFrame
 
 from lumibot.entities import Asset, Bars
+from lumibot.tools.helpers import create_options_symbol, parse_timestep_qty_and_unit
 
 from .data_source import DataSource
 
@@ -177,6 +183,18 @@ class AlpacaData(DataSource):
 
             # The price is the average of the bid and ask
             price = (quote.bid_price + quote.ask_price) / 2
+        elif isinstance(asset, Asset) and asset.asset_type == "option":
+            # Options
+            symbol = create_options_symbol(
+                asset.symbol,
+                asset.expiration,
+                asset.right,
+                asset.strike,
+            )
+            client = OptionHistoricalDataClient(self.api_key, self.api_secret)
+            params = OptionLatestTradeRequest(symbol_or_symbols=symbol)
+            trade = client.get_option_latest_trade(params)[symbol]
+            price = trade.price
         else:
             # Stocks
             client = StockHistoricalDataClient(self.api_key, self.api_secret)
@@ -195,7 +213,7 @@ class AlpacaData(DataSource):
 
         if not timestep:
             timestep = self.get_timestep()
-
+        
         response = self._pull_source_symbol_bars(
             asset,
             length,
@@ -266,6 +284,22 @@ class AlpacaData(DataSource):
                 params = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=freq, start=start, end=end)
                 barset = client.get_crypto_bars(params)
 
+            elif asset.asset_type == "option":
+                symbol = create_options_symbol(
+                    asset.symbol,
+                    asset.expiration,
+                    asset.right,
+                    asset.strike,
+                )
+
+                client = OptionHistoricalDataClient(self.api_key, self.api_secret)
+                params = OptionBarsRequest(symbol_or_symbols=symbol, timeframe=freq, start=start, end=end)
+
+                try:
+                    barset = client.get_option_bars(params)
+                except Exception as e:
+                    logging.error(f"Could not get options data from Alpaca for {symbol} with the following error: {e}")
+                    return None
             else:
                 symbol = asset.symbol
 
@@ -309,6 +343,7 @@ class AlpacaData(DataSource):
             timeshift = timedelta(minutes=16)
 
         parsed_timestep = self._parse_source_timestep(timestep, reverse=True)
+
         kwargs = dict(limit=length)
         if timeshift:
             end = datetime.now() - timeshift

@@ -57,14 +57,38 @@ class TestAlpacaData(unittest.TestCase):
         print(bars.df)
         self.assertIsNotNone(bars)
         self.assertIsInstance(bars, Bars)
-    
+
+    def test_get_historical_prices_with_timestep(self):
+        asset = Asset(symbol="NVDA")
+        bars = self.alpaca_data.get_historical_prices(asset, 100, timestep="hour")
+        print(f"{bars=}")
+        print(bars.df)
+        self.assertIsNotNone(bars)
+        self.assertIsInstance(bars, Bars)
+
+    def test_get_historical_prices_with_start(self):
+        asset = Asset(symbol="VZ")
+        start_datetime = datetime(year=2022, month=12, day=1, hour=14)
+        bars = self.alpaca_data.get_historical_prices(asset, 12, timestep="day", start=start_datetime)
+        print(f"{bars=}")
+        self.assertIsNotNone(bars)
+        self.assertIsInstance(bars, Bars)
+        self.assertGreater(len(bars.df), 10)
+
+    def test_get_historical_prices_in_start_end_range(self):
+        asset = Asset(symbol="T")
+        start_datetime = datetime(year=2022, month=12, day=1, hour=14)
+        end_datetime = datetime(year=2022, month=12, day=2, hour=18)
+        bars = self.alpaca_data.get_historical_prices(asset, 12, timestep="day", start=start_datetime, end=end_datetime)
+        bars
+
     def test_option_get_last_price(self):
-        asset = Asset(symbol="AAPL", asset_type="option", expiration="2025-12-19", strike=200, right="call")
+        asset = Asset(symbol="SPY", asset_type="option", expiration="2025-12-19", strike=200, right="call")
         price = self.alpaca_data.get_last_price(asset)
         print(f"{price=}")
         self.assertIsNotNone(price)
         self.assertIsInstance(price, float)
-    
+
     def test_option_get_historical_prices(self):
         asset = Asset(symbol="AAPL", asset_type="option", expiration="2025-12-19", strike=200, right="call")
         # Symbol should be AAPL251219C00200000
@@ -75,7 +99,14 @@ class TestAlpacaData(unittest.TestCase):
         #     print(bars.df)
         self.assertIsNotNone(bars)
         self.assertIsInstance(bars, Bars)
-    
+        option_asset = Asset.symbol2asset("AAPL261218P00350000")
+        print(f"{option_asset=}")
+        bars = self.alpaca_data.get_historical_prices(option_asset, length=25, timestep="day", exchange=None)
+        print(f"{bars=}")    
+        self.assertIsNotNone(bars)
+        self.assertIsInstance(bars, Bars)
+        self.assertGreater(len(bars.df), 1)
+
     def test_get_option_chain(self):
         asset = Asset(symbol="AAPL")
         chain = self.alpaca_data.get_chains(asset)
@@ -84,17 +115,19 @@ class TestAlpacaData(unittest.TestCase):
         self.assertIsInstance(chain, dict)
 
     def test_get_option_chain_for_exchange(self):
-        asset = Asset(symbol="AAPL")
+        asset = Asset(symbol="IBM")
         chain = self.alpaca_data.get_chains(asset, exchange="X")
         print(f"{chain=}")
         self.assertIsNotNone(chain)
         self.assertIsInstance(chain, dict)
 
-    # def test_get_barset_from_api(self):
-    #     asset = Asset(symbol="AAPL")
-    #     df = self.alpaca_data.get_barset_from_api(asset, "1Min", limit=100)
-    #     self.assertIsNotNone(df)
-    #     self.assertIsInstance(df, pd.DataFrame)
+    def test_get_barset_from_api(self):
+        asset = Asset(symbol="ETH", asset_type="crypto")
+        quote = Asset(symbol="USD", asset_type="forex")
+        df = self.alpaca_data.get_barset_from_api(asset, "1Min", limit=100, quote=quote)
+        print(f"{df=}")
+        self.assertIsNotNone(df)
+        self.assertIsInstance(df, pd.DataFrame)
 
     # def test_pull_source_bars(self):
     #     assets = [Asset(symbol="AAPL"), Asset(symbol="GOOG")]

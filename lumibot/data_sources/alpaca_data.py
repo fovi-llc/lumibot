@@ -31,58 +31,58 @@ class AlpacaData(DataSource):
     TIMESTEP_MAPPING = [
         {
             "timestep": "minute",
-            "representations": [TimeFrame.Minute, "minute"],
+            "representations": [TimeFrame.Minute, "1 Min", "1Min", "Min", "minute"],
         },
         {
             "timestep": "5 minutes",
             "representations": [
-                [TimeFrame(5, TimeFrameUnit.Minute), "minute"],
+                TimeFrame(5, TimeFrameUnit.Minute), "5 Min", "5Min",
             ],
         },
         {
             "timestep": "10 minutes",
             "representations": [
-                [TimeFrame(10, TimeFrameUnit.Minute), "minute"],
+                TimeFrame(10, TimeFrameUnit.Minute), "10 Min", "10Min",
             ],
         },
         {
             "timestep": "15 minutes",
             "representations": [
-                [TimeFrame(15, TimeFrameUnit.Minute), "minute"],
+                TimeFrame(15, TimeFrameUnit.Minute), "15 Min", "15Min",
             ],
         },
         {
             "timestep": "30 minutes",
             "representations": [
-                [TimeFrame(30, TimeFrameUnit.Minute), "minute"],
+                TimeFrame(30, TimeFrameUnit.Minute), "30 Min", "30Min",
             ],
         },
         {
-            "timestep": "1 hour",
+            "timestep": "hour",
             "representations": [
-                [TimeFrame.Hour, "hour"],
+                TimeFrame.Hour, "1 Hour", "1Hour", "Hour", "hour",
             ],
         },
         {
             "timestep": "2 hours",
             "representations": [
-                [TimeFrame(2, TimeFrameUnit.Hour), "hour"],
+                TimeFrame(2, TimeFrameUnit.Hour), "2 Hour", "2Hour",
             ],
         },
         {
             "timestep": "4 hours",
             "representations": [
-                [TimeFrame(4, TimeFrameUnit.Hour), "hour"],
+                TimeFrame(4, TimeFrameUnit.Hour), "4 Hour", "4Hour",
             ],
         },
         {
             "timestep": "day",
-            "representations": [TimeFrame.Day, "day"],
+            "representations": [TimeFrame.Day, "1 Day", "1Day", "Day", "day",],
         },
     ]
 
     @staticmethod
-    def timeframe_to_timedelta(timeframe) -> timedelta:
+    def timeframe_to_timedelta(timeframe: TimeFrame) -> timedelta:
         """Converts an alpaca TimeFrame to a timedelta.
 
         Args:
@@ -101,7 +101,7 @@ class AlpacaData(DataSource):
                 return timedelta(days=timeframe.amount)
             case TimeFrameUnit.Week:
                 return timedelta(weeks=timeframe.amount)
-        
+
         raise ValueError(f"Invalid timeframe unit: {timeframe.unit}")
 
     """Common base class for data_sources/alpaca and brokers/alpaca"""
@@ -431,46 +431,33 @@ class AlpacaData(DataSource):
 
         if not limit:
             limit = 1000
-
-        if end:
-            end = self.to_default_timezone(end)
+        # print(f"{limit=}")
+        if isinstance(timeframe, str):
+            timeframe = self._parse_source_timestep(timeframe)
+            timeframe = self._parse_source_timestep(timeframe, reverse=True)
+        is_limited_request = not start or not end
+        # print(f"{timeframe=}")
+        # logging.info(f"{AlpacaData.timeframe_to_timedelta(timeframe)=}")
+        # print(f"{AlpacaData.timeframe_to_timedelta(timeframe)=}")
+        # print(f"{is_limited_request=}")
+        if not start and not end:
+            end = datetime.now(timezone.utc)
         if not self.is_paid_account:
             # Alpaca free accounts get 15 minute delayed data
-            if not end:
-                end = datetime.now(timezone.utc)
             end = end - timedelta(minutes=15)
-
+        if end:
+            end = self.to_default_timezone(end)
+        # print(f"{end=}")
         if start:
             start = self.to_default_timezone(start)
+            if not end:
+                end = start + (limit * AlpacaData.timeframe_to_timedelta(timeframe))
         else:
             start = end - (limit * AlpacaData.timeframe_to_timedelta(timeframe))
+        # print(f"{start=}")
+        # print(f"{end=}")
+        # logging.info(f"{start=}, {end=}")
 
-
-        # loop_limit = limit
-        # if not start:
-        #     if str(freq) == "1Min":
-        #         if datetime.now().weekday() == 0:  # for Mondays as prior days were off
-        #             loop_limit = (
-        #                 limit + 4896
-        #             )  # subtract 4896 minutes to take it from Monday to Friday, as there is no data between Friday 4:00 pm and Monday 9:30 pm causing an incomplete or empty dataframe
-        #         else:
-        #             loop_limit = limit
-        #     elif str(freq) == "1Day":
-        #         loop_limit = limit * 1.5  # number almost perfect for normal weeks where only weekends are off
-
-        #         # Add 3 days to the start date to make sure we get enough data on extra long weekends (like Thanksgiving)
-        #         loop_limit += 3
-
-        # if str(freq) == "1Min":
-        #     start = end - timedelta(minutes=loop_limit)
-
-        # elif str(freq) == "1Day":
-        #     start = end - timedelta(days=loop_limit)
-
-
-        # df = []  # to use len(df) below without an error
-
-        # while (len(df) < limit) and (((end is None) and (start is None)) or (start < end)):
         if asset.asset_type == "crypto":
             symbol = f"{asset.symbol}/{quote.symbol}"
 
@@ -499,8 +486,8 @@ class AlpacaData(DataSource):
 
             client = StockHistoricalDataClient(self.api_key, self.api_secret)
             params = StockBarsRequest(symbol_or_symbols=symbol, timeframe=timeframe, start=start, end=end, limit=limit)
-            logging.info(f"StockBarsRequest: {params=}")
-            print(f"StockBarsRequest: {params=}")
+            # logging.info(f"StockBarsRequest: {params=}")
+            # print(f"StockBarsRequest: {params=}")
             try:
                 barset = client.get_stock_bars(params)
             except Exception as e:
@@ -520,7 +507,7 @@ class AlpacaData(DataSource):
         df = df.iloc[-limit:]
         df = df[df.close > 0]
 
-        if len(df) < limit:
+        if is_limited_request and (len(df) < limit):
             logging.warning(
                 f"Dataframe for {symbol} has {len(df)} rows while {limit} were requested. Further data does not exist for Alpaca"
             )

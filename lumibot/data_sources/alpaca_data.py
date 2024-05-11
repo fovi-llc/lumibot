@@ -17,7 +17,7 @@ from alpaca.data.requests import (
     StockLatestTradeRequest,
     StockLatestQuoteRequest,
 )
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 from lumibot.entities import Asset, Bars
 from lumibot.tools.helpers import create_options_symbol, parse_timestep_qty_and_unit
@@ -36,43 +36,43 @@ class AlpacaData(DataSource):
         {
             "timestep": "5 minutes",
             "representations": [
-                [f"5{TimeFrame.Minute}", "minute"],
+                [TimeFrame(5, TimeFrameUnit.Minute), "minute"],
             ],
         },
         {
             "timestep": "10 minutes",
             "representations": [
-                [f"10{TimeFrame.Minute}", "minute"],
+                [TimeFrame(10, TimeFrameUnit.Minute), "minute"],
             ],
         },
         {
             "timestep": "15 minutes",
             "representations": [
-                [f"15{TimeFrame.Minute}", "minute"],
+                [TimeFrame(15, TimeFrameUnit.Minute), "minute"],
             ],
         },
         {
             "timestep": "30 minutes",
             "representations": [
-                [f"30{TimeFrame.Minute}", "minute"],
+                [TimeFrame(30, TimeFrameUnit.Minute), "minute"],
             ],
         },
         {
             "timestep": "1 hour",
             "representations": [
-                [f"{TimeFrame.Hour}", "hour"],
+                [TimeFrame.Hour, "hour"],
             ],
         },
         {
             "timestep": "2 hours",
             "representations": [
-                [f"2{TimeFrame.Hour}", "hour"],
+                [TimeFrame(2, TimeFrameUnit.Hour), "hour"],
             ],
         },
         {
             "timestep": "4 hours",
             "representations": [
-                [f"4{TimeFrame.Hour}", "hour"],
+                [TimeFrame(4, TimeFrameUnit.Hour), "hour"],
             ],
         },
         {
@@ -80,6 +80,29 @@ class AlpacaData(DataSource):
             "representations": [TimeFrame.Day, "day"],
         },
     ]
+
+    @staticmethod
+    def timeframe_to_timedelta(timeframe) -> timedelta:
+        """Converts an alpaca TimeFrame to a timedelta.
+
+        Args:
+            timeframe_unit: The alpaca TimeFrame to convert.
+
+        Returns:
+            A timedelta representing the specified timeframe unit.
+        """
+
+        match timeframe.unit:
+            case TimeFrameUnit.Minute:
+                return timedelta(minutes=timeframe.amount)
+            case TimeFrameUnit.Hour:
+                return timedelta(hours=timeframe.amount)
+            case TimeFrameUnit.Day:
+                return timedelta(days=timeframe.amount)
+            case TimeFrameUnit.Week:
+                return timedelta(weeks=timeframe.amount)
+        
+        raise ValueError(f"Invalid timeframe unit: {timeframe.unit}")
 
     """Common base class for data_sources/alpaca and brokers/alpaca"""
 
@@ -297,7 +320,7 @@ class AlpacaData(DataSource):
         return price
 
     def get_historical_prices(
-        self, asset, length, timestep="", timeshift=None, quote=None, exchange=None, include_after_hours=True
+        self, asset, length, timestep="", timeshift=None, start=None, end=None, quote=None, exchange=None, include_after_hours=True
     ):
         """Get bars for a given asset"""
         if isinstance(asset, str):
@@ -311,6 +334,8 @@ class AlpacaData(DataSource):
             length,
             timestep=timestep,
             timeshift=timeshift,
+            start=start,
+            end=end,
             quote=quote,
             exchange=exchange,
             include_after_hours=include_after_hours,
@@ -391,7 +416,7 @@ class AlpacaData(DataSource):
             greeks[greek_name] = df[col].iloc[0]
         return greeks
 
-    def get_barset_from_api(self, asset, freq, limit=None, end=None, start=None, quote=None):
+    def get_barset_from_api(self, asset, timeframe, limit=None, start=None, end=None, quote=None):
         """
         gets historical bar data for the given stock symbol
         and time params.
@@ -407,84 +432,93 @@ class AlpacaData(DataSource):
         if not limit:
             limit = 1000
 
-        if not end:
-            # Alpaca limitation of not getting the most recent 15 minutes
-            if not self.is_paid_account:
-                end = datetime.now(timezone.utc) - timedelta(minutes=15)
+        if end:
+            end = self.to_default_timezone(end)
+        if not self.is_paid_account:
+            # Alpaca free accounts get 15 minute delayed data
+            if not end:
+                end = datetime.now(timezone.utc)
+            end = end - timedelta(minutes=15)
 
-        if not start:
-            if str(freq) == "1Min":
-                if datetime.now().weekday() == 0:  # for Mondays as prior days were off
-                    loop_limit = (
-                        limit + 4896
-                    )  # subtract 4896 minutes to take it from Monday to Friday, as there is no data between Friday 4:00 pm and Monday 9:30 pm causing an incomplete or empty dataframe
-                else:
-                    loop_limit = limit
+        if start:
+            start = self.to_default_timezone(start)
+        else:
+            start = end - (limit * AlpacaData.timeframe_to_timedelta(timeframe))
 
-            elif str(freq) == "1Day":
-                loop_limit = limit * 1.5  # number almost perfect for normal weeks where only weekends are off
 
-                # Add 3 days to the start date to make sure we get enough data on extra long weekends (like Thanksgiving)
-                loop_limit += 3
+        # loop_limit = limit
+        # if not start:
+        #     if str(freq) == "1Min":
+        #         if datetime.now().weekday() == 0:  # for Mondays as prior days were off
+        #             loop_limit = (
+        #                 limit + 4896
+        #             )  # subtract 4896 minutes to take it from Monday to Friday, as there is no data between Friday 4:00 pm and Monday 9:30 pm causing an incomplete or empty dataframe
+        #         else:
+        #             loop_limit = limit
+        #     elif str(freq) == "1Day":
+        #         loop_limit = limit * 1.5  # number almost perfect for normal weeks where only weekends are off
 
-        df = []  # to use len(df) below without an error
+        #         # Add 3 days to the start date to make sure we get enough data on extra long weekends (like Thanksgiving)
+        #         loop_limit += 3
 
-        # arbitrary limit of upto 4 calls after which it will give up
-        while loop_limit / limit <= 64 and len(df) < limit:
-            if str(freq) == "1Min":
-                start = end - timedelta(minutes=loop_limit)
+        # if str(freq) == "1Min":
+        #     start = end - timedelta(minutes=loop_limit)
 
-            elif str(freq) == "1Day":
-                start = end - timedelta(days=loop_limit)
+        # elif str(freq) == "1Day":
+        #     start = end - timedelta(days=loop_limit)
 
-            if asset.asset_type == "crypto":
-                symbol = f"{asset.symbol}/{quote.symbol}"
 
-                client = CryptoHistoricalDataClient()
-                params = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=freq, start=start, end=end)
-                barset = client.get_crypto_bars(params)
+        # df = []  # to use len(df) below without an error
 
-            elif asset.asset_type == "option":
-                symbol = create_options_symbol(
-                    asset.symbol,
-                    asset.expiration,
-                    asset.right,
-                    asset.strike,
-                )
+        # while (len(df) < limit) and (((end is None) and (start is None)) or (start < end)):
+        if asset.asset_type == "crypto":
+            symbol = f"{asset.symbol}/{quote.symbol}"
 
-                client = OptionHistoricalDataClient(self.api_key, self.api_secret)
-                params = OptionBarsRequest(symbol_or_symbols=symbol, timeframe=freq, start=start, end=end)
+            client = CryptoHistoricalDataClient()
+            params = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=timeframe, start=start, end=end, limit=limit)
+            barset = client.get_crypto_bars(params)
 
-                try:
-                    barset = client.get_option_bars(params)
-                except Exception as e:
-                    logging.error(f"Could not get options data from Alpaca for {symbol} with the following error: {e}")
-                    return None
-            else:
-                symbol = asset.symbol
+        elif asset.asset_type == "option":
+            symbol = create_options_symbol(
+                asset.symbol,
+                asset.expiration,
+                asset.right,
+                asset.strike,
+            )
 
-                client = StockHistoricalDataClient(self.api_key, self.api_secret)
-                params = StockBarsRequest(symbol_or_symbols=symbol, timeframe=freq, start=start, end=end)
+            client = OptionHistoricalDataClient(self.api_key, self.api_secret)
+            params = OptionBarsRequest(symbol_or_symbols=symbol, timeframe=timeframe, start=start, end=end, limit=limit)
 
-                try:
-                    barset = client.get_stock_bars(params)
-                except Exception as e:
-                    logging.error(f"Could not get pricing data from Alpaca for {symbol} with the following error: {e}")
-                    return None
+            try:
+                barset = client.get_option_bars(params)
+            except Exception as e:
+                logging.error(f"Could not get options data from Alpaca for {symbol} with the following error: {e}")
+                return None
+        else:
+            symbol = asset.symbol
 
-            df = barset.df
-
-            # Alpaca now returns a dataframe with a MultiIndex. We only want an index of timestamps
-            df = df.reset_index(level=0, drop=True)
-
-            if df.empty:
-                logging.error(f"Could not get any pricing data from Alpaca for {symbol}, the DataFrame came back empty")
+            client = StockHistoricalDataClient(self.api_key, self.api_secret)
+            params = StockBarsRequest(symbol_or_symbols=symbol, timeframe=timeframe, start=start, end=end, limit=limit)
+            logging.info(f"StockBarsRequest: {params=}")
+            print(f"StockBarsRequest: {params=}")
+            try:
+                barset = client.get_stock_bars(params)
+            except Exception as e:
+                logging.error(f"Could not get pricing data from Alpaca for {symbol} with the following error: {e}")
                 return None
 
-            df = df[~df.index.duplicated(keep="first")]
-            df = df.iloc[-limit:]
-            df = df[df.close > 0]
-            loop_limit *= 2
+        df = barset.df
+
+        # Alpaca now returns a dataframe with a MultiIndex. We only want an index of timestamps
+        df = df.reset_index(level=0, drop=True)
+
+        if df.empty:
+            logging.error(f"Could not get any pricing data from Alpaca for {symbol}, the DataFrame came back empty")
+            return None
+
+        df = df[~df.index.duplicated(keep="first")]
+        df = df.iloc[-limit:]
+        df = df[df.close > 0]
 
         if len(df) < limit:
             logging.warning(
@@ -494,31 +528,30 @@ class AlpacaData(DataSource):
         return df
 
     def _pull_source_bars(
-        self, assets, length, timestep=MIN_TIMESTEP, timeshift=None, quote=None, include_after_hours=True
+        self, assets, length, timestep=MIN_TIMESTEP, timeshift=None, start=None, end=None, quote=None, include_after_hours=True
     ):
         """pull broker bars for a list assets"""
-        if timeshift is None and timestep == "day":
+        if not self.is_paid_account and (timeshift is None and timestep == "day"):
             # Alpaca throws an error if we don't do this and don't have a data subscription because
             # they require a subscription for historical data less than 15 minutes old
             timeshift = timedelta(minutes=16)
 
         parsed_timestep = self._parse_source_timestep(timestep, reverse=True)
 
-        kwargs = dict(limit=length)
         if timeshift:
-            end = datetime.now() - timeshift
-            end = self.to_default_timezone(end)
-            kwargs["end"] = end
+            if end is None:
+                end = datetime.now()
+            end = end - timeshift
 
         result = {}
         for asset in assets:
-            data = self.get_barset_from_api(asset, parsed_timestep, quote=quote, **kwargs)
+            data = self.get_barset_from_api(asset, parsed_timestep, length, start=start, end=end, quote=quote)
             result[asset] = data
 
         return result
 
     def _pull_source_symbol_bars(
-        self, asset, length, timestep=MIN_TIMESTEP, timeshift=None, quote=None, exchange=None, include_after_hours=True
+        self, asset, length, timestep=MIN_TIMESTEP, timeshift=None, start=None, end=None, quote=None, exchange=None, include_after_hours=True
     ):
         if exchange is not None:
             logging.warning(
@@ -526,7 +559,7 @@ class AlpacaData(DataSource):
             )
 
         """pull broker bars for a given asset"""
-        response = self._pull_source_bars([asset], length, timestep=timestep, timeshift=timeshift, quote=quote)
+        response = self._pull_source_bars([asset], length, timestep=timestep, timeshift=timeshift, start=start, end=end, quote=quote)
         return response[asset]
 
     def _parse_source_symbol_bars(self, response, asset, quote=None, length=None):

@@ -1,10 +1,14 @@
 import os
 import unittest
 
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 from lumibot.data_sources import AlpacaData
 from lumibot.entities.asset import Asset
 from lumibot.entities.bars import Bars
+
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 
 ALPACA_CONFIG = {  # Paper trading!
@@ -14,7 +18,7 @@ ALPACA_CONFIG = {  # Paper trading!
     "API_SECRET": os.environ.get("APCA_API_SECRET_KEY"),
     # If you want to use real money you must change this to False
     "PAPER": True,
-    "ENDPOINT": "https://paper-api.alpaca.markets",
+    # "ENDPOINT": "https://paper-api.alpaca.markets",
 }
 
 
@@ -27,6 +31,17 @@ class TestAlpacaData(unittest.TestCase):
         self.assertEqual(self.alpaca_data.api_key, ALPACA_CONFIG["API_KEY"])
         self.assertEqual(self.alpaca_data.api_secret, ALPACA_CONFIG["API_SECRET"])
         self.assertEqual(self.alpaca_data.is_paper, ALPACA_CONFIG["PAPER"])
+
+    def test_timeframe_to_timedelta(self):
+        td = AlpacaData.timeframe_to_timedelta(TimeFrame.Minute)
+        print(f"{td=}")
+        self.assertEqual(AlpacaData.timeframe_to_timedelta(TimeFrame.Minute), timedelta(minutes=1))
+        self.assertEqual(AlpacaData.timeframe_to_timedelta(TimeFrame.Hour), timedelta(hours=1))
+        self.assertEqual(AlpacaData.timeframe_to_timedelta(TimeFrame.Day), timedelta(days=1))
+        self.assertEqual(AlpacaData.timeframe_to_timedelta(TimeFrame.Week), timedelta(weeks=1))
+        self.assertEqual(AlpacaData.timeframe_to_timedelta(TimeFrame(2, TimeFrameUnit.Minute)), timedelta(minutes=2))
+        self.assertEqual(AlpacaData.timeframe_to_timedelta(TimeFrame(5, TimeFrameUnit.Hour)), timedelta(hours=5))
+        # Day and Week units can only be used with amount 1
 
     def test_get_last_price(self):
         asset = Asset(symbol="AAPL")
